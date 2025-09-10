@@ -4,129 +4,140 @@ addEventListener('fetch', event => {
 
 // 配置
 const config = {
-  githubDomain: 'github.com',
-  apiDomain: 'api.github.com',
-  rawDomain: 'raw.githubusercontent.com',
-  gistDomain: 'gist.githubusercontent.com',
-  cdnDomain: 'github.githubassets.com',
-  // 可选：设置伪装页面，访问根目录时显示
-  fakePage: 'https://example.com',
-  // 启用搜索功能
-  enableSearch: true
+  githubDomains: [
+    'github.com',
+    'api.github.com',
+    'raw.githubusercontent.com',
+    'gist.githubusercontent.com',
+    'github.githubassets.com',
+    'camo.githubusercontent.com',
+    'avatars.githubusercontent.com',
+    'avatars0.githubusercontent.com',
+    'avatars1.githubusercontent.com',
+    'avatars2.githubusercontent.com',
+    'avatars3.githubusercontent.com'
+  ],
+  // 代理根路径显示搜索页面
+  showSearchAtRoot: true
 }
 
-// 处理所有请求
+// 主请求处理函数
 async function handleRequest(request) {
   const url = new URL(request.url)
-  const path = url.pathname
-
-  // 根路径显示伪装页面或搜索页面
-  if (path === '/' || path === '') {
-    return config.enableSearch ? getSearchPage() : fetch(config.fakePage)
+  const proxyHost = url.hostname
+  
+  // 根路径显示搜索页面
+  if (config.showSearchAtRoot && (url.pathname === '/' || url.pathname === '')) {
+    return new Response(getSearchPage(), {
+      headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    })
   }
-
-  // 处理搜索请求
-  if (config.enableSearch && path.startsWith('/search')) {
-    return handleSearchRequest(request)
-  }
-
+  
   // 解析目标URL
-  let targetUrl = await parseTargetUrl(request)
+  const targetUrl = getTargetUrl(url)
   if (!targetUrl) {
-    return new Response('Invalid URL', { status: 400 })
+    return new Response('无效的请求地址', { status: 400 })
   }
-
+  
   // 构建代理请求
   const proxyRequest = new Request(targetUrl, {
     method: request.method,
-    headers: modifyHeaders(request.headers, targetUrl),
+    headers: getProxyHeaders(request.headers, new URL(targetUrl)),
     body: request.body,
     redirect: 'manual'
   })
-
-  // 发送代理请求
+  
+  // 发送请求并处理响应
   try {
     const response = await fetch(proxyRequest)
-    return modifyResponse(response, url)
+    return modifyResponse(response, proxyHost)
   } catch (e) {
-    return new Response(`Proxy error: ${e.message}`, { status: 500 })
+    return new Response(`代理错误: ${e.message}`, { status: 500 })
   }
 }
 
 // 解析目标URL
-async function parseTargetUrl(request) {
-  const url = new URL(request.url)
-  let targetPath = url.pathname.substring(1) // 移除开头的斜杠
+function getTargetUrl(proxyUrl) {
+  const path = proxyUrl.pathname.substring(1) // 移除开头的斜杠
+  const search = proxyUrl.search
   
-  // 处理不同类型的GitHub域名
-  if (targetPath.startsWith(config.githubDomain) ||
-      targetPath.startsWith(config.apiDomain) ||
-      targetPath.startsWith(config.rawDomain) ||
-      targetPath.startsWith(config.gistDomain) ||
-      targetPath.startsWith(config.cdnDomain)) {
-    return `https://${targetPath}${url.search}`
-  }
-  
-  // 自动添加github.com前缀
-  return `https://${config.githubDomain}/${targetPath}${url.search}`
-}
-
-// 修改请求头
-function modifyHeaders(headers, targetUrl) {
-  const newHeaders = new Headers(headers)
-  const url = new URL(targetUrl)
-  
-  // 设置正确的Host头
-  newHeaders.set('Host', url.hostname)
-  
-  // 移除可能导致问题的头
-  newHeaders.delete('Referer')
-  newHeaders.delete('Origin')
-  
-  return newHeaders
-}
-
-// 修改响应
-async function modifyResponse(response, originalUrl) {
-  const contentType = response.headers.get('Content-Type') || ''
-  const originalHost = new URL(originalUrl).hostname
-  
-  // 处理重定向
-  if (response.redirected || [301, 302, 307, 308].includes(response.status)) {
-    const location = response.headers.get('Location')
-    if (location) {
-      const newLocation = rewriteUrl(location, originalHost)
-      const newHeaders = new Headers(response.headers)
-      newHeaders.set('Location', newLocation)
-      return new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: newHeaders
-      })
+  // 如果路径已经包含GitHub域名，直接使用
+  for (const domain of config.githubDomains) {
+    if (path.startsWith(domain)) {
+      return `https://${path}${search}`
     }
   }
   
-  // 处理HTML内容，替换链接
-  if (contentType.includes('text/html') || contentType.includes('text/css')) {
-    const text = await response.text()
-    const modifiedText = rewriteHtml(text, originalHost)
-    const newHeaders = new Headers(response.headers)
-    // 防止缓存问题
-    newHeaders.delete('Content-Security-Policy')
-    newHeaders.delete('Content-Security-Policy-Report-Only')
-    newHeaders.delete('X-XSS-Protection')
-    return new Response(modifiedText, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: newHeaders
-    })
+  // 否则默认添加github.com前缀
+  return `https://github.com/${path}${search}`
+}
+
+// 构建代理请求头
+function getProxyHeaders(originalHeaders, targetUrl) {
+  const headers = new Headers(originalHeaders)
+  
+  // 设置正确的Host头
+  headers.set('Host', targetUrl.hostname)
+  
+  // 移除可能引起问题的头
+  headers.delete('Origin')
+  headers.delete('Referer')
+  
+  // 添加转发信息
+  headers.set('X-Forwarded-For', originalHeaders.get('X-Forwarded-For') || '')
+  headers.set('X-Forwarded-Host', originalHeaders.get('Host') || '')
+  
+  return headers
+}
+
+// 处理响应，重写链接
+async function modifyResponse(response, proxyHost) {
+  const contentType = response.headers.get('Content-Type') || ''
+  const status = response.status
+  
+  // 处理重定向
+  if ([301, 302, 307, 308].includes(status)) {
+    const location = response.headers.get('Location')
+    if (location) {
+      const newLocation = rewriteUrl(location, proxyHost)
+      const headers = new Headers(response.headers)
+      headers.set('Location', newLocation)
+      return new Response(response.body, { status, headers })
+    }
   }
   
-  // 其他内容直接返回
+  // 处理HTML和CSS内容中的链接
+  if (contentType.includes('text/html') || contentType.includes('text/css')) {
+    let body = await response.text()
+    body = rewriteHtml(body, proxyHost)
+    
+    const headers = new Headers(response.headers)
+    // 移除安全策略限制
+    headers.delete('Content-Security-Policy')
+    headers.delete('Content-Security-Policy-Report-Only')
+    headers.delete('X-XSS-Protection')
+    // 更新内容长度
+    headers.set('Content-Length', new TextEncoder().encode(body).length.toString())
+    
+    return new Response(body, { status, headers })
+  }
+  
+  // 处理JavaScript文件
+  if (contentType.includes('text/javascript') || contentType.includes('application/javascript')) {
+    let body = await response.text()
+    body = rewriteJs(body, proxyHost)
+    
+    const headers = new Headers(response.headers)
+    headers.set('Content-Length', new TextEncoder().encode(body).length.toString())
+    
+    return new Response(body, { status, headers })
+  }
+  
+  // 其他类型内容直接返回
   return response
 }
 
-// 重写URL
+// 重写URL为代理URL
 function rewriteUrl(url, proxyHost) {
   if (!url) return url
   
@@ -136,18 +147,11 @@ function rewriteUrl(url, proxyHost) {
   }
   
   // 处理绝对路径
-  const githubDomains = [
-    config.githubDomain,
-    config.apiDomain,
-    config.rawDomain,
-    config.gistDomain,
-    config.cdnDomain
-  ]
-  
-  for (const domain of githubDomains) {
+  for (const domain of config.githubDomains) {
     if (url.includes(domain)) {
       return url.replace(`https://${domain}`, `https://${proxyHost}`)
                 .replace(`http://${domain}`, `https://${proxyHost}`)
+                .replace(`//${domain}`, `//${proxyHost}`)
     }
   }
   
@@ -156,62 +160,77 @@ function rewriteUrl(url, proxyHost) {
 
 // 重写HTML内容中的链接
 function rewriteHtml(html, proxyHost) {
-  let modifiedHtml = html
+  let result = html
   
-  // 替换各种GitHub域名
-  const githubDomains = [
-    config.githubDomain,
-    config.apiDomain,
-    config.rawDomain,
-    config.gistDomain,
-    config.cdnDomain
-  ]
-  
-  for (const domain of githubDomains) {
-    modifiedHtml = modifiedHtml
-      .replace(new RegExp(`https://${domain}`, 'g'), `https://${proxyHost}`)
-      .replace(new RegExp(`http://${domain}`, 'g'), `https://${proxyHost}`)
-      .replace(new RegExp(`//${domain}`, 'g'), `//${proxyHost}`)
+  // 替换所有GitHub相关域名
+  for (const domain of config.githubDomains) {
+    // 替换带协议的URL
+    result = result.replace(new RegExp(`https://${domain}`, 'g'), `https://${proxyHost}`)
+    result = result.replace(new RegExp(`http://${domain}`, 'g'), `https://${proxyHost}`)
+    // 替换相对协议的URL
+    result = result.replace(new RegExp(`//${domain}`, 'g'), `//${proxyHost}`)
   }
   
-  // 处理JavaScript中的链接
-  modifiedHtml = modifiedHtml.replace(/github\.com/g, proxyHost)
-  
-  return modifiedHtml
+  return result
 }
 
-// 生成搜索页面
+// 重写JavaScript中的链接
+function rewriteJs(js, proxyHost) {
+  let result = js
+  
+  // 替换JavaScript中的GitHub域名
+  for (const domain of config.githubDomains) {
+    result = result.replace(new RegExp(`'https://${domain}'`, 'g'), `'https://${proxyHost}'`)
+    result = result.replace(new RegExp(`"https://${domain}"`, 'g'), `"https://${proxyHost}"`)
+  }
+  
+  return result
+}
+
+// 生成搜索页面HTML
 function getSearchPage() {
-  const html = `
+  return `
   <!DOCTYPE html>
-  <html lang="en">
+  <html lang="zh-CN">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GitHub Search</title>
+    <title>GitHub 搜索</title>
     <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
       body {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        max-width: 1200px;
-        margin: 0 auto;
-        padding: 20px;
+        line-height: 1.6;
+        color: #24292e;
         background-color: #f6f8fa;
+        padding: 20px;
       }
       .container {
-        background-color: white;
-        padding: 40px;
+        max-width: 1000px;
+        margin: 0 auto;
+        background-color: #fff;
         border-radius: 6px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.13);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+        padding: 30px;
       }
       h1 {
-        color: #24292e;
         text-align: center;
         margin-bottom: 30px;
+        color: #24292e;
       }
       .search-form {
         display: flex;
         gap: 10px;
         margin-bottom: 30px;
+      }
+      @media (max-width: 768px) {
+        .search-form {
+          flex-direction: column;
+        }
       }
       #search-input {
         flex: 1;
@@ -225,7 +244,7 @@ function getSearchPage() {
         font-size: 16px;
         border: 1px solid #d1d5da;
         border-radius: 6px;
-        background-color: white;
+        background-color: #fff;
       }
       button {
         padding: 12px 20px;
@@ -235,22 +254,23 @@ function getSearchPage() {
         border-radius: 6px;
         font-size: 16px;
         cursor: pointer;
+        transition: background-color 0.2s;
       }
       button:hover {
         background-color: #2c974b;
       }
       .results {
-        margin-top: 30px;
+        margin-top: 20px;
       }
       .result-item {
-        padding: 20px;
-        border-bottom: 1px solid #eaecef;
+        padding: 15px 0;
+        border-bottom: 1px solid #e1e4e8;
       }
       .result-item:last-child {
         border-bottom: none;
       }
       .result-title {
-        font-size: 20px;
+        font-size: 18px;
         margin-bottom: 5px;
       }
       .result-title a {
@@ -262,40 +282,41 @@ function getSearchPage() {
       }
       .result-description {
         color: #586069;
-        margin-bottom: 10px;
+        margin-bottom: 8px;
+        font-size: 14px;
       }
       .result-meta {
         color: #586069;
-        font-size: 14px;
+        font-size: 12px;
+      }
+      .status {
+        padding: 20px;
+        text-align: center;
+        display: none;
       }
       .loading {
-        text-align: center;
-        padding: 20px;
-        display: none;
+        color: #0366d6;
       }
       .error {
         color: #cb2431;
-        padding: 20px;
-        text-align: center;
-        display: none;
       }
     </style>
   </head>
   <body>
     <div class="container">
-      <h1>GitHub Search</h1>
+      <h1>GitHub 搜索</h1>
       <form class="search-form" id="search-form">
-        <input type="text" id="search-input" placeholder="Search repositories, users, or code..." required>
+        <input type="text" id="search-input" placeholder="搜索仓库、用户或代码..." required>
         <select id="search-type">
-          <option value="repositories">Repositories</option>
-          <option value="users">Users</option>
-          <option value="code">Code</option>
+          <option value="repositories">仓库</option>
+          <option value="users">用户</option>
+          <option value="code">代码</option>
         </select>
-        <button type="submit">Search</button>
+        <button type="submit">搜索</button>
       </form>
       
-      <div class="loading">Searching...</div>
-      <div class="error"></div>
+      <div class="status loading">搜索中...</div>
+      <div class="status error"></div>
       <div class="results" id="results"></div>
     </div>
     
@@ -303,7 +324,7 @@ function getSearchPage() {
       document.getElementById('search-form').addEventListener('submit', async function(e) {
         e.preventDefault();
         
-        const query = document.getElementById('search-input').value;
+        const query = document.getElementById('search-input').value.trim();
         const type = document.getElementById('search-type').value;
         const resultsDiv = document.getElementById('results');
         const loadingDiv = document.querySelector('.loading');
@@ -317,13 +338,13 @@ function getSearchPage() {
         try {
           // 构建API请求URL
           const encodedQuery = encodeURIComponent(query);
-          const apiUrl = \`/api.${config.githubDomain}/search/\${type}?q=\${encodedQuery}&per_page=10\`;
+          const apiUrl = \`/api.github.com/search/\${type}?q=\${encodedQuery}&per_page=10\`;
           
           // 发送请求
           const response = await fetch(apiUrl);
           
           if (!response.ok) {
-            throw new Error('Search failed: ' + response.statusText);
+            throw new Error(\`搜索失败: \${response.status} \${response.statusText}\`);
           }
           
           const data = await response.json();
@@ -340,11 +361,11 @@ function getSearchPage() {
                   <div class="result-title">
                     <a href="/\${item.full_name}">\${item.name}</a>
                   </div>
-                  <div class="result-description">\${item.description || ''}</div>
+                  <div class="result-description">\${item.description || '无描述'}</div>
                   <div class="result-meta">
-                    <span>Stars: \${item.stargazers_count}</span> · 
-                    <span>Forks: \${item.forks_count}</span> · 
-                    <span>Language: \${item.language || 'Unknown'}</span>
+                    <span>⭐ \${item.stargazers_count}</span> · 
+                    <span>🍴 \${item.forks_count}</span> · 
+                    <span>💻 \${item.language || '未知'}</span>
                   </div>
                 \`;
               } else if (type === 'users') {
@@ -352,10 +373,10 @@ function getSearchPage() {
                   <div class="result-title">
                     <a href="/\${item.login}">\${item.login}</a>
                   </div>
-                  <div class="result-description">\${item.bio || ''}</div>
+                  <div class="result-description">\${item.bio || '无简介'}</div>
                   <div class="result-meta">
-                    <span>Repositories: \${item.public_repos}</span> · 
-                    <span>Followers: \${item.followers}</span>
+                    <span>📦 \${item.public_repos} 个仓库</span> · 
+                    <span>👥 \${item.followers} 个追随者</span>
                   </div>
                 \`;
               } else if (type === 'code') {
@@ -365,7 +386,7 @@ function getSearchPage() {
                   </div>
                   <div class="result-description">\${item.preview || ''}</div>
                   <div class="result-meta">
-                    <span>Repository: <a href="/\${item.repository.full_name}">\${item.repository.full_name}</a></span>
+                    来自 <a href="/\${item.repository.full_name}">\${item.repository.full_name}</a>
                   </div>
                 \`;
               }
@@ -373,7 +394,7 @@ function getSearchPage() {
               resultsDiv.appendChild(resultItem);
             });
           } else {
-            resultsDiv.innerHTML = '<p>No results found.</p>';
+            resultsDiv.innerHTML = '<p>没有找到匹配的结果</p>';
           }
         } catch (error) {
           loadingDiv.style.display = 'none';
@@ -385,45 +406,5 @@ function getSearchPage() {
   </body>
   </html>
   `;
-  
-  return new Response(html, {
-    headers: {
-      'Content-Type': 'text/html; charset=utf-8',
-    },
-  });
 }
-
-// 处理搜索API请求
-async function handleSearchRequest(request) {
-  const url = new URL(request.url);
-  const path = url.pathname;
-  
-  // 构建目标API URL
-  const targetPath = path.replace('/search', `/search`);
-  const targetUrl = `https://${config.apiDomain}${targetPath}${url.search}`;
-  
-  // 构建代理请求
-  const proxyRequest = new Request(targetUrl, {
-    method: request.method,
-    headers: modifyHeaders(request.headers, targetUrl),
-    body: request.body
-  });
-  
-  try {
-    const response = await fetch(proxyRequest);
-    const newHeaders = new Headers(response.headers);
     
-    // 添加CORS头
-    newHeaders.set('Access-Control-Allow-Origin', '*');
-    newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    newHeaders.set('Access-Control-Allow-Headers', 'Content-Type');
-    
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: newHeaders
-    });
-  } catch (e) {
-    return new Response(`Search error: ${e.message}`, { status: 500 });
-  }
-}
