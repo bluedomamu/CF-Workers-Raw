@@ -3,30 +3,30 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // 1. 根路径返回搜索主页
+    // 1. 根路径直接返回搜索主页（不再使用Nginx伪装页）
     if (path === '/') {
       return new Response(await getSearchHomePage(), {
         headers: { 'Content-Type': 'text/html; charset=UTF-8' }
       });
     }
 
-    // 2. 处理搜索请求（/search 路径）
+    // 2. 处理搜索请求
     if (path.startsWith('/search')) {
       return handleSearchRequest(request);
     }
 
-    // 3. 处理API代理（仓库、Issue、Release等数据）
+    // 3. 处理API代理
     if (path.startsWith('/api/')) {
       return handleApiProxy(request);
     }
 
-    // 4. 处理内容浏览（代码查看、仓库目录等）
+    // 4. 处理内容浏览
     return handleContentBrowse(request);
   }
 };
 
 /**
- * 生成搜索主页HTML
+ * 生成搜索主页HTML（移除所有伪装相关元素）
  */
 async function getSearchHomePage() {
   return `
@@ -37,6 +37,7 @@ async function getSearchHomePage() {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>GitHub开源项目浏览与搜索</title>
   <style>
+    /* 保持原有样式，但移除伪装相关提示 */
     * {
       margin: 0;
       padding: 0;
@@ -93,14 +94,6 @@ async function getSearchHomePage() {
     button:hover {
       background-color: #0256b3;
     }
-    .tips {
-      color: #666;
-      font-size: 14px;
-      margin-bottom: 20px;
-      padding: 10px;
-      background-color: #f8f9fa;
-      border-radius: 4px;
-    }
     .results-area {
       margin-top: 20px;
     }
@@ -144,14 +137,21 @@ async function getSearchHomePage() {
     .error {
       color: #d73a49;
     }
+    .intro {
+      color: #24292e;
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>GitHub开源项目浏览与搜索</h1>
     
-    <div class="tips">
-      提示：支持搜索仓库、用户、代码，无需登录即可查看所有开源内容
+    <!-- 直接说明服务功能，不做任何伪装 -->
+    <div class="intro">
+      这是一个GitHub开源项目浏览工具，支持搜索仓库、用户和代码，无需登录即可查看所有公开的开源内容。
+      您可以直接搜索感兴趣的项目，或通过项目链接查看代码、Issues和发布版本。
     </div>
 
     <form class="search-box" id="search-form">
@@ -175,6 +175,7 @@ async function getSearchHomePage() {
   </div>
 
   <script>
+    <!-- 保持原有搜索功能逻辑不变 -->
     const form = document.getElementById('search-form');
     const resultsEl = document.getElementById('results');
     const loadingEl = document.querySelector('.loading');
@@ -185,32 +186,27 @@ async function getSearchHomePage() {
       const keyword = document.getElementById('search-input').value.trim();
       const type = document.getElementById('search-type').value;
 
-      // 重置状态
       resultsEl.innerHTML = '';
       loadingEl.style.display = 'block';
       errorEl.style.display = 'none';
 
       try {
-        // 发送搜索请求
         const res = await fetch(\`/search?type=\${type}&q=\${encodeURIComponent(keyword)}\`);
         if (!res.ok) throw new Error(\`搜索失败：\${res.status}\`);
         
         const data = await res.json();
         loadingEl.style.display = 'none';
 
-        // 处理搜索结果
         if (!data.items || data.items.length === 0) {
           resultsEl.innerHTML = '<p style="text-align:center;padding:20px;">未找到匹配的开源项目</p>';
           return;
         }
 
-        // 渲染结果（按类型区分）
         data.items.forEach(item => {
           const itemEl = document.createElement('div');
           itemEl.className = 'result-item';
 
           if (type === 'repositories') {
-            // 仓库结果
             itemEl.innerHTML = \`
               <div class="result-title">
                 <a href="/repo/\${item.full_name}">$\{item.full_name}</a>
@@ -224,7 +220,6 @@ async function getSearchHomePage() {
               </div>
             \`;
           } else if (type === 'users') {
-            // 用户结果
             itemEl.innerHTML = \`
               <div class="result-title">
                 <a href="/user/\${item.login}">$\{item.login}</a>
@@ -237,7 +232,6 @@ async function getSearchHomePage() {
               </div>
             \`;
           } else if (type === 'code') {
-            // 代码结果
             itemEl.innerHTML = \`
               <div class="result-title">
                 <a href="/code/\${item.repository.full_name}/\${item.path}?ref=\${item.ref}">
@@ -269,37 +263,33 @@ async function getSearchHomePage() {
 }
 
 /**
- * 处理搜索请求（代理GitHub Search API）
+ * 处理搜索请求（保持不变）
  */
 async function handleSearchRequest(request) {
   const url = new URL(request.url);
   const searchType = url.searchParams.get('type') || 'repositories';
   const keyword = url.searchParams.get('q');
 
-  // 校验参数
   if (!keyword) {
     return new Response('搜索关键词不能为空', { status: 400 });
   }
 
-  // 构建GitHub官方API地址（仅请求开源内容，无需认证）
   const githubApiUrl = `https://api.github.com/search/${searchType}?q=${encodeURIComponent(keyword)}&per_page=15&sort=stars`;
 
   try {
-    // 发送请求并转发响应
     const response = await fetch(githubApiUrl, {
       headers: {
-        'User-Agent': 'GitHub Open Source Proxy (Non-Auth)', // 必须设置User-Agent，GitHub API要求
+        'User-Agent': 'GitHub Open Source Proxy',
         'Accept': 'application/vnd.github.v3+json'
       }
     });
 
-    // 转发响应数据（保持原状态码和JSON格式）
     const data = await response.json();
     return new Response(JSON.stringify(data), {
       status: response.status,
       headers: {
         'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*' // 允许跨域
+        'Access-Control-Allow-Origin': '*'
       }
     });
   } catch (err) {
@@ -308,19 +298,17 @@ async function handleSearchRequest(request) {
 }
 
 /**
- * 处理API代理（仓库详情、Issue列表、Release列表等）
+ * 处理API代理（保持不变）
  */
 async function handleApiProxy(request) {
   const url = new URL(request.url);
-  const apiPath = url.pathname.replace('/api/', ''); // 提取API路径（如：repos/facebook/react）
-
-  // 构建GitHub官方API地址
+  const apiPath = url.pathname.replace('/api/', '');
   const githubApiUrl = `https://api.github.com/${apiPath}${url.search}`;
 
   try {
     const response = await fetch(githubApiUrl, {
       headers: {
-        'User-Agent': 'GitHub Open Source Proxy (Non-Auth)',
+        'User-Agent': 'GitHub Open Source Proxy',
         'Accept': 'application/vnd.github.v3+json'
       }
     });
@@ -339,32 +327,32 @@ async function handleApiProxy(request) {
 }
 
 /**
- * 处理内容浏览（仓库详情、代码查看、Issue详情、Release详情）
+ * 处理内容浏览（保持不变，但确保所有页面都没有伪装元素）
  */
 async function handleContentBrowse(request) {
   const url = new URL(request.url);
   const path = url.pathname;
 
-  // 1. 查看仓库详情（/repo/用户名/仓库名）
+  // 1. 查看仓库详情
   if (path.startsWith('/repo/')) {
     const repoFullName = path.replace('/repo/', '');
     return renderRepoDetail(repoFullName, url.search);
   }
 
-  // 2. 查看用户主页（/user/用户名）
+  // 2. 查看用户主页
   if (path.startsWith('/user/')) {
     const userName = path.replace('/user/', '');
     return renderUserDetail(userName, url.search);
   }
 
-  // 3. 查看代码文件（/code/用户名/仓库名/文件路径）
+  // 3. 查看代码文件
   if (path.startsWith('/code/')) {
     const codePath = path.replace('/code/', '');
-    const ref = url.searchParams.get('ref') || 'main'; // 默认主分支
+    const ref = url.searchParams.get('ref') || 'main';
     return renderCodeDetail(codePath, ref);
   }
 
-  // 4. 查看Issue列表（/repo/用户名/仓库名/issues）
+  // 4. 查看Issue列表
   if (path.includes('/issues')) {
     const [repoPart, _] = path.split('/issues');
     const repoFullName = repoPart.replace('/repo/', '');
@@ -372,40 +360,35 @@ async function handleContentBrowse(request) {
     return renderIssuesList(repoFullName, page);
   }
 
-  // 5. 查看Release列表（/repo/用户名/仓库名/releases）
+  // 5. 查看Release列表
   if (path.includes('/releases')) {
     const [repoPart, _] = path.split('/releases');
     const repoFullName = repoPart.replace('/repo/', '');
     return renderReleasesList(repoFullName);
   }
 
-  // 未匹配的路径
   return new Response('未找到对应的开源内容', { status: 404 });
 }
 
-/**
- * 渲染仓库详情页面
- */
+// 以下为各个渲染函数（保持功能不变，但移除所有伪装相关的描述和链接）
 async function renderRepoDetail(repoFullName, searchParams) {
-  // 1. 获取仓库基础信息
+  // 实现代码保持不变，但确保页面中没有伪装相关内容
   const repoApiUrl = `https://api.github.com/repos/${repoFullName}`;
   const repoRes = await fetch(repoApiUrl, {
-    headers: { 'User-Agent': 'GitHub Open Source Proxy (Non-Auth)' }
+    headers: { 'User-Agent': 'GitHub Open Source Proxy' }
   });
   if (!repoRes.ok) {
     return new Response(`获取仓库信息失败：${repoRes.statusText}`, { status: repoRes.status });
   }
   const repoData = await repoRes.json();
 
-  // 2. 获取仓库目录（默认主分支）
   const defaultBranch = repoData.default_branch || 'main';
   const contentsApiUrl = `https://api.github.com/repos/${repoFullName}/contents?ref=${defaultBranch}`;
   const contentsRes = await fetch(contentsApiUrl, {
-    headers: { 'User-Agent': 'GitHub Open Source Proxy (Non-Auth)' }
+    headers: { 'User-Agent': 'GitHub Open Source Proxy' }
   });
   const contentsData = contentsRes.ok ? await contentsRes.json() : [];
 
-  // 3. 生成HTML页面
   return new Response(`
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -414,6 +397,7 @@ async function renderRepoDetail(repoFullName, searchParams) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${repoData.full_name} - GitHub开源仓库</title>
   <style>
+    /* 样式保持不变 */
     * { margin:0; padding:0; box-sizing:border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
     body { background:#f6f8fa; padding:20px; }
     .header { background:#fff; padding:20px; border-radius:8px; margin-bottom:20px; box-shadow:0 1px 3px rgba(0,0,0,0.1); }
@@ -469,7 +453,6 @@ async function renderRepoDetail(repoFullName, searchParams) {
       <div class="dir-title">${defaultBranch} 分支 - 仓库目录</div>
       <ul class="dir-list">
         ${contentsData.map(item => {
-          // 区分文件和文件夹
           const isDir = item.type === 'dir';
           const icon = isDir ? '📁' : '📄';
           const link = isDir 
@@ -492,31 +475,26 @@ async function renderRepoDetail(repoFullName, searchParams) {
   });
 }
 
-/**
- * 渲染代码文件查看页面
- */
+// 其他渲染函数（renderCodeDetail、renderIssuesList、renderReleasesList）保持不变
+// 工具函数（formatFileSize、escapeHtml）保持不变
+
 async function renderCodeDetail(codePath, ref) {
-  // 拆分路径：用户名/仓库名/文件路径
   const [userRepo, ...filePathParts] = codePath.split('/');
   const filePath = filePathParts.join('/');
   const [owner, repo] = userRepo.split('/');
 
-  // 获取文件内容（GitHub API返回base64编码的内容）
   const fileApiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${ref}`;
   const fileRes = await fetch(fileApiUrl, {
-    headers: { 'User-Agent': 'GitHub Open Source Proxy (Non-Auth)' }
+    headers: { 'User-Agent': 'GitHub Open Source Proxy' }
   });
   if (!fileRes.ok) {
     return new Response(`获取文件失败：${fileRes.statusText}`, { status: fileRes.status });
   }
   const fileData = await fileRes.json();
 
-  // 解码base64内容
   const fileContent = atob(fileData.content);
-  // 获取文件扩展名（用于语法高亮提示）
   const fileExt = filePath.split('.').pop() || '';
 
-  // 生成HTML页面
   return new Response(`
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -525,6 +503,7 @@ async function renderCodeDetail(codePath, ref) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${fileData.name} - ${owner}/${repo}</title>
   <style>
+    /* 样式保持不变 */
     * { margin:0; padding:0; box-sizing:border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
     body { background:#f6f8fa; padding:20px; }
     .back-links { margin-bottom:20px; }
@@ -564,7 +543,7 @@ async function renderCodeDetail(codePath, ref) {
   </div>
 
   <div class="code-container">
-    <div class="lang-tip">文件类型：${fileExt.toUpperCase()}（仅显示内容，未启用语法高亮）</div>
+    <div class="lang-tip">文件类型：${fileExt.toUpperCase()}</div>
     <pre class="code-pre"><code>${escapeHtml(fileContent)}</code></pre>
   </div>
 </body>
@@ -574,15 +553,11 @@ async function renderCodeDetail(codePath, ref) {
   });
 }
 
-/**
- * 渲染Issues列表页面
- */
 async function renderIssuesList(repoFullName, page = 1) {
-  // 获取Issues列表（仅开源项目的公开Issues）
   const issuesApiUrl = `https://api.github.com/repos/${repoFullName}/issues?state=open&page=${page}&per_page=20`;
   const issuesRes = await fetch(issuesApiUrl, {
     headers: { 
-      'User-Agent': 'GitHub Open Source Proxy (Non-Auth)',
+      'User-Agent': 'GitHub Open Source Proxy',
       'Accept': 'application/vnd.github.v3+json'
     }
   });
@@ -591,7 +566,6 @@ async function renderIssuesList(repoFullName, page = 1) {
   }
   const issuesData = await issuesRes.json();
 
-  // 生成HTML页面
   return new Response(`
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -600,6 +574,7 @@ async function renderIssuesList(repoFullName, page = 1) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Issues - ${repoFullName}</title>
   <style>
+    /* 样式保持不变 */
     * { margin:0; padding:0; box-sizing:border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
     body { background:#f6f8fa; padding:20px; }
     .back-link { display:inline-block; margin-bottom:20px; color:#0366d6; text-decoration:none; }
@@ -662,15 +637,11 @@ async function renderIssuesList(repoFullName, page = 1) {
   });
 }
 
-/**
- * 渲染Releases列表页面
- */
 async function renderReleasesList(repoFullName) {
-  // 获取Releases列表
   const releasesApiUrl = `https://api.github.com/repos/${repoFullName}/releases`;
   const releasesRes = await fetch(releasesApiUrl, {
     headers: { 
-      'User-Agent': 'GitHub Open Source Proxy (Non-Auth)',
+      'User-Agent': 'GitHub Open Source Proxy',
       'Accept': 'application/vnd.github.v3+json'
     }
   });
@@ -679,7 +650,6 @@ async function renderReleasesList(repoFullName) {
   }
   const releasesData = await releasesRes.json();
 
-  // 生成HTML页面
   return new Response(`
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -688,6 +658,7 @@ async function renderReleasesList(repoFullName) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Releases - ${repoFullName}</title>
   <style>
+    /* 样式保持不变 */
     * { margin:0; padding:0; box-sizing:border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
     body { background:#f6f8fa; padding:20px; }
     .back-link { display:inline-block; margin-bottom:20px; color:#0366d6; text-decoration:none; }
@@ -746,18 +717,12 @@ async function renderReleasesList(repoFullName) {
   });
 }
 
-/**
- * 工具函数：格式化文件大小（B → KB/MB）
- */
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/**
- * 工具函数：转义HTML特殊字符（防止XSS）
- */
 function escapeHtml(str) {
   return str
     .replace(/&/g, '&amp;')
